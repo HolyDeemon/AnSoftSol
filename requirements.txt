@@ -1,0 +1,8 @@
+FastApi
+pydantic
+python-dotenv
+jinja2
+elasticsearch[async]>=8,<9
+uvicorn
+python-multipart
+aiohttp

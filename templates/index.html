@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Поиск по документам</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 24px;
+            background: #f5f5f5;
+            color: #1a1a1a;
+        }
+        h1 { font-size: 22px; margin-bottom: 20px; }
+        .card {
+            background: #fff;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .card h2 { font-size: 16px; margin: 0 0 12px; color: #555; }
+        input[type="text"] {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 15px;
+            outline: none;
+        }
+        input[type="text"]:focus { border-color: #4a90d9; }
+        button {
+            padding: 10px 18px;
+            background: #4a90d9;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            cursor: pointer;
+        }
+        button:hover { background: #3a7bc0; }
+        button:disabled { background: #aaa; cursor: not-allowed; }
+        .row { display: flex; gap: 10px; align-items: center; }
+        .row input[type="text"] { flex: 1; }
+        .status {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #666;
+            min-height: 20px;
+        }
+        .status.error { color: #c0392b; }
+        .status.success { color: #27ae60; }
+        .hit {
+            padding: 14px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .hit:last-child { border-bottom: none; }
+        .hit-meta {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 6px;
+        }
+        .hit-text {
+            font-size: 14px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+        }
+        .hit-text em {
+            background: #fff3a3;
+            font-style: normal;
+            padding: 0 2px;
+            border-radius: 3px;
+        }
+        .empty { color: #999; font-size: 14px; padding: 12px 0; }
+        #results { margin-top: 8px; }
+        .spinner {
+            display: inline-block;
+            width: 14px; height: 14px;
+            border: 2px solid #ddd;
+            border-top-color: #4a90d9;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            vertical-align: middle;
+            margin-right: 6px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .hit-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 6px;
+        }
+        .hit-meta {
+            font-size: 12px;
+            color: #888;
+            margin: 0;
+        }
+        .delete-btn {
+            padding: 4px 10px;
+            background: #e74c3c;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .delete-btn:hover { background: #c0392b; }
+        .delete-btn:disabled { background: #aaa; cursor: not-allowed; }
+        .hit.removing { opacity: 0.4; pointer-events: none; }
+        .delete-action {
+            background: #e74c3c;
+        }
+        .delete-action:hover { background: #c0392b; }
+    </style>
+</head>
+<body>
+    <h1>Поиск по документам</h1>
+
+    <!-- Загрузка CSV -->
+    <div class="card">
+        <h2>Загрузить CSV</h2>
+        <div class="row">
+            <input type="file" id="csv-input" accept=".csv">
+            <button id="upload-btn" disabled>Загрузить</button>
+        </div>
+        <div class="status" id="upload-status"></div>
+    </div>
+    <div class="card">
+        <h2>Удалить по ID</h2>
+        <div class="row">
+            <input type="text" id="delete-id" placeholder="Введите ID документа..." inputmode="numeric">
+            <button id="delete-btn" class="delete-action">Удалить</button>
+        </div>
+        <div class="status" id="delete-status"></div>
+    </div>
+    <!-- Поиск -->
+    <div class="card">
+        <h2>Поиск</h2>
+        <div class="row">
+            <input type="text" id="query" placeholder="Введите текст для поиска...">
+            <button id="search-btn">Найти</button>
+        </div>
+        <div class="status" id="search-status"></div>
+        <div id="results"></div>
+    </div>
+
+    <script>
+        const csvInput = document.getElementById("csv-input");
+        const uploadBtn = document.getElementById("upload-btn");
+        const uploadStatus = document.getElementById("upload-status");
+        const queryInput = document.getElementById("query");
+        const searchBtn = document.getElementById("search-btn");
+        const searchStatus = document.getElementById("search-status");
+        const results = document.getElementById("results");
+
+        // --- Загрузка CSV ---
+
+        csvInput.addEventListener("change", () => {
+            uploadBtn.disabled = !csvInput.files.length;
+        });
+
+        uploadBtn.addEventListener("click", async () => {
+            const file = csvInput.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append("file", file);
+
+            uploadBtn.disabled = true;
+            uploadStatus.className = "status";
+            uploadStatus.innerHTML = '<span class="spinner"></span>Загрузка...';
+
+            try {
+                const resp = await fetch("/upload-csv", {
+                    method: "POST",
+                    body: formData,
+                    // Content-Type НЕ ставим — браузер сам добавит boundary
+                });
+
+                if (!resp.ok) {
+                    const err = await resp.text();
+                    throw new Error(err);
+                }
+
+                const data = await resp.json();
+                uploadStatus.className = "status success";
+                uploadStatus.textContent =
+                    `Загружено: ${data.imported} документов` +
+                    (data.errors ? `, ошибок: ${data.errors}` : "");
+            } catch (e) {
+                uploadStatus.className = "status error";
+                uploadStatus.textContent = "Ошибка: " + e.message;
+            } finally {
+                uploadBtn.disabled = false;
+            }
+        });
+
+        // --- Удаление по ID ---
+
+        const deleteIdInput = document.getElementById("delete-id");
+        const deleteBtn = document.getElementById("delete-btn");
+        const deleteStatus = document.getElementById("delete-status");
+
+        async function deleteById() {
+            const id = deleteIdInput.value.trim();
+            if (!id) {
+                deleteStatus.className = "status error";
+                deleteStatus.textContent = "Введите ID";
+                return;
+            }
+
+            if (!confirm(`Удалить документ ID ${id}?`)) return;
+
+            deleteBtn.disabled = true;
+            deleteStatus.className = "status";
+            deleteStatus.innerHTML = '<span class="spinner"></span>Удаление...';
+
+            try {
+                const resp = await fetch(`/doc?doc_id=${encodeURIComponent(id)}`, {
+                    method: "DELETE",
+                });
+
+                if (!resp.ok) {
+                    let msg = await resp.text();
+                    // FastAPI возвращает JSON с detail — попробуем распарсить
+                    try {
+                        const j = JSON.parse(msg);
+                        if (j.detail) msg = JSON.stringify(j.detail);
+                    } catch (_) {}
+                    throw new Error(msg);
+                }
+
+                deleteStatus.className = "status success";
+                deleteStatus.textContent = `Документ ${id} удалён`;
+                deleteIdInput.value = "";
+
+                // Если в результатах поиска есть карточка с этим ID — убираем её
+                const hitEl = results.querySelector(`.hit[data-id="${id}"]`);
+                if (hitEl) {
+                    hitEl.remove();
+                    const remaining = results.querySelectorAll(".hit").length;
+                    searchStatus.textContent = `Найдено: ${remaining}`;
+                    if (remaining === 0) {
+                        results.innerHTML = '<div class="empty">Ничего не найдено</div>';
+                    }
+                }
+            } catch (e) {
+                deleteStatus.className = "status error";
+                deleteStatus.textContent = "Ошибка удаления: " + e.message;
+            } finally {
+                deleteBtn.disabled = false;
+            }
+        }
+
+        deleteBtn.addEventListener("click", deleteById);
+        deleteIdInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") deleteById();
+        });
+        // --- Поиск ---
+
+        async function doSearch() {
+            const q = queryInput.value.trim();
+            if (!q) {
+                searchStatus.className = "status error";
+                searchStatus.textContent = "Введите запрос";
+                return;
+            }
+
+            searchBtn.disabled = true;
+            searchStatus.className = "status";
+            searchStatus.innerHTML = '<span class="spinner"></span>Поиск...';
+            results.innerHTML = "";
+
+            try {
+                const resp = await fetch(`/search?text=${encodeURIComponent(q)}`);
+                if (!resp.ok) {
+                    throw new Error(await resp.text());
+                }
+
+                const data = await resp.json();
+
+                // Поддерживаем два формата ответа:
+                // 1) сырой ответ ES с hits.hits
+                // 2) уже нормализованный список
+                const hits = data.hits?.hits ?? data.hits ?? [];
+
+                searchStatus.className = "status";
+                searchStatus.textContent = `Найдено: ${data.total ?? hits.length}`;
+
+                if (!hits.length) {
+                    results.innerHTML = '<div class="empty">Ничего не найдено</div>';
+                    return;
+                }
+
+                results.innerHTML = hits.map(renderHit).join("");
+            } catch (e) {
+                searchStatus.className = "status error";
+                searchStatus.textContent = "Ошибка: " + e.message;
+            } finally {
+                searchBtn.disabled = false;
+            }
+        }
+
+    function renderHit(hit) {
+        const src = hit._source ?? hit;
+        const id = hit._id ?? src.id ?? hit.id ?? "—";
+        const score = hit._score ?? hit.score ?? 0;
+        const highlight =
+            hit.highlight?.text ??
+            hit.highlights ??
+            null;
+
+        let textHtml;
+        if (highlight && highlight.length) {
+            textHtml = highlight.join(" … ");
+        } else {
+            const raw = src.text ?? "";
+            textHtml = escapeHtml(raw.slice(0, 400)) +
+                (raw.length > 400 ? "…" : "");
+        }
+
+        return `
+            <div class="hit" data-id="${id}">
+                <div class="hit-header">
+                    <div class="hit-meta">ID: ${id} · score: ${Number(score).toFixed(2)}</div>
+                    <button class="delete-btn" data-id="${id}">Удалить</button>
+                </div>
+                <div class="hit-text">${textHtml}</div>
+            </div>
+        `;
+    }
+
+    // Делегирование: один обработчик на контейнер
+    results.addEventListener("click", async (e) => {
+        const btn = e.target.closest(".delete-btn");
+        if (!btn) return;
+
+        const id = btn.dataset.id;
+        if (!confirm(`Удалить документ ID ${id}?`)) return;
+
+        const hitEl = btn.closest(".hit");
+        btn.disabled = true;
+        hitEl.classList.add("removing");
+
+        try {
+            const resp = await fetch(`/doc?doc_id=${encodeURIComponent(id)}`, {
+                method: "DELETE",
+            });
+
+            if (!resp.ok) {
+                const err = await resp.text();
+                throw new Error(err);
+            }
+
+            // Убираем карточку из DOM
+            hitEl.remove();
+
+            // Обновляем счётчик
+            const remaining = results.querySelectorAll(".hit").length;
+            if (remaining === 0) {
+                results.innerHTML = '<div class="empty">Ничего не найдено</div>';
+                searchStatus.textContent = "Найдено: 0";
+            } else {
+                searchStatus.textContent = `Найдено: ${remaining}`;
+            }
+        } catch (err) {
+            btn.disabled = false;
+            hitEl.classList.remove("removing");
+            searchStatus.className = "status error";
+            searchStatus.textContent = "Ошибка удаления: " + err.message;
+        }
+    });
+
+        function escapeHtml(s) {
+            return s
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;");
+        }
+
+        searchBtn.addEventListener("click", doSearch);
+        queryInput.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") doSearch();
+        });
+    </script>
+</body>
+</html>
